@@ -1,0 +1,1493 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Blooming Tulip Bouquet</title>
+
+<style>
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+    }
+
+    canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+</style>
+</head>
+
+<body>
+
+<canvas id="ascii"></canvas>
+
+<script type="module">
+
+import * as THREE from
+"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+// ==========================================
+// SETTINGS
+// ==========================================
+
+const FONT_SIZE = 5;
+const FPS = 24;
+
+const FLOWER_COUNT = 25;
+const LEAF_COUNT = 8;
+
+// Slow 360-degree rotation
+const ROTATION_DURATION = 45;
+
+// Faster blooming animation
+const BLOOM_START = 1;
+const BLOOM_DURATION = 5;
+const BLOOM_STAGGER = 2;
+
+const WIND_STRENGTH = 0.025;
+const COLOR_VIBRANCE = 1.15;
+
+const CHARACTERS =
+    " .,:;irsXA253hMHGS#9B&@";
+
+// ==========================================
+// ASCII CANVAS
+// ==========================================
+
+const canvas = document.getElementById("ascii");
+const ctx = canvas.getContext("2d");
+
+const sample = document.createElement("canvas");
+
+const sampleCtx = sample.getContext("2d", {
+    willReadFrequently: true
+});
+
+let W, H;
+let cols, rows;
+let charWidth, charHeight;
+
+// ==========================================
+// THREE.JS SCENE
+// ==========================================
+
+const scene = new THREE.Scene();
+
+scene.background = new THREE.Color(0x000000);
+
+const camera = new THREE.PerspectiveCamera(
+    35,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    100
+);
+
+camera.position.set(0, 1.5, 15);
+camera.lookAt(0, 0.2, 0);
+
+const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    preserveDrawingBuffer: true
+});
+
+renderer.setPixelRatio(1);
+
+renderer.outputColorSpace =
+    THREE.SRGBColorSpace;
+
+renderer.toneMapping =
+    THREE.ACESFilmicToneMapping;
+
+renderer.toneMappingExposure = 1.15;
+
+// ==========================================
+// SOFT LIGHTING
+// ==========================================
+
+const ambientLight =
+    new THREE.AmbientLight(0xffffff, 1.3);
+
+scene.add(ambientLight);
+
+const mainLight =
+    new THREE.DirectionalLight(0xfff0df, 2.8);
+
+mainLight.position.set(-5, 8, 7);
+scene.add(mainLight);
+
+const fillLight =
+    new THREE.DirectionalLight(0xdde7ff, 1.2);
+
+fillLight.position.set(5, 3, -5);
+scene.add(fillLight);
+
+const rimLight =
+    new THREE.DirectionalLight(0xffffff, 1.4);
+
+rimLight.position.set(0, 5, -6);
+scene.add(rimLight);
+
+// ==========================================
+// MAIN BOUQUET
+// ==========================================
+
+const bouquet = new THREE.Group();
+
+scene.add(bouquet);
+
+const animatedFlowers = [];
+const animatedLeaves = [];
+
+// ==========================================
+// HELPER FUNCTIONS
+// ==========================================
+
+function random(min, max) {
+    return min + Math.random() * (max - min);
+}
+
+function clamp(value, min = 0, max = 1) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function lerp(a, b, t) {
+    return a + (b - a) * t;
+}
+
+function smooth(value) {
+
+    const t = clamp(value);
+
+    return t * t * (3 - 2 * t);
+}
+
+function material(color, roughness = 0.65) {
+
+    return new THREE.MeshStandardMaterial({
+        color,
+        roughness,
+        metalness: 0,
+        side: THREE.DoubleSide
+    });
+}
+
+// ==========================================
+// CUSTOM SURFACE GENERATOR
+// ==========================================
+
+function createSurface(
+    widthSegments,
+    heightSegments,
+    positionFunction,
+    colorFunction
+) {
+
+    const vertices = [];
+    const colors = [];
+    const indices = [];
+
+    for (let y = 0; y <= heightSegments; y++) {
+
+        const v = y / heightSegments;
+
+        for (let x = 0; x <= widthSegments; x++) {
+
+            const u = x / widthSegments;
+
+            const point = positionFunction(u, v);
+
+            vertices.push(
+                point.x,
+                point.y,
+                point.z
+            );
+
+            if (colorFunction) {
+
+                const color = colorFunction(u, v);
+
+                colors.push(
+                    color.r,
+                    color.g,
+                    color.b
+                );
+            }
+        }
+    }
+
+    for (let y = 0; y < heightSegments; y++) {
+
+        for (let x = 0; x < widthSegments; x++) {
+
+            const a =
+                y * (widthSegments + 1) + x;
+
+            const b = a + 1;
+            const c = a + widthSegments + 1;
+            const d = c + 1;
+
+            indices.push(a, b, c);
+            indices.push(b, d, c);
+        }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+
+    geometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(
+            vertices, 3
+        )
+    );
+
+    if (colors.length > 0) {
+
+        geometry.setAttribute(
+            "color",
+            new THREE.Float32BufferAttribute(
+                colors, 3
+            )
+        );
+    }
+
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    return geometry;
+}
+
+// ==========================================
+// TULIP COLOUR PALETTES
+// ==========================================
+
+const palettes = [
+
+    // Rose red
+    {
+        dark: "#923a4c",
+        base: "#e46c80",
+        light: "#ffb7bf"
+    },
+
+    // Baby pink
+    {
+        dark: "#b35c83",
+        base: "#f0a0bd",
+        light: "#ffe1eb"
+    },
+
+    // Butter yellow
+    {
+        dark: "#b99135",
+        base: "#f2d36d",
+        light: "#fff5bc"
+    },
+
+    // Lavender purple
+    {
+        dark: "#755296",
+        base: "#b18bd7",
+        light: "#e5d0ff"
+    },
+
+    // Peach orange
+    {
+        dark: "#b56640",
+        base: "#f3a16d",
+        light: "#ffdbc1"
+    },
+
+    // Cream white
+    {
+        dark: "#b3b5a2",
+        base: "#f3efda",
+        light: "#fffdf3"
+    },
+
+    // Dusty rose
+    {
+        dark: "#914766",
+        base: "#dc8baa",
+        light: "#f8c9dc"
+    },
+
+    // Soft lilac
+    {
+        dark: "#79638f",
+        base: "#c4afe5",
+        light: "#eee0ff"
+    }
+];
+
+// ==========================================
+// REALISTIC PETAL SHAPE
+// ==========================================
+
+function petalPosition(u, v, inner, bloom) {
+
+    const side = u * 2 - 1;
+
+    const height = inner ? 0.91 : 1.05;
+    const width = inner ? 0.35 : 0.43;
+
+    const profile = Math.pow(
+        Math.sin(Math.PI * v),
+        0.55
+    );
+
+    const widthGrowth =
+        lerp(0.72, 1, bloom);
+
+    const x =
+        side *
+        width *
+        profile *
+        widthGrowth;
+
+    const y =
+        v * height *
+        lerp(0.94, 1, bloom) -
+        side * side * 0.045 * profile;
+
+    // Soft rounded petal body
+
+    const cup =
+        0.045 +
+        Math.sin(v * Math.PI) *
+        lerp(
+            inner ? 0.20 : 0.27,
+            inner ? 0.28 : 0.38,
+            bloom
+        );
+
+    // Gradually opening petal tips
+
+    const tipOpening =
+        Math.pow(v, 3) *
+        lerp(
+            0.025,
+            inner ? 0.23 : 0.34,
+            bloom
+        );
+
+    const curvedEdge =
+        side * side *
+        0.10 *
+        profile;
+
+    const z =
+        cup +
+        tipOpening +
+        curvedEdge;
+
+    return new THREE.Vector3(x, y, z);
+}
+
+// ==========================================
+// CREATE BLOOMING PETALS
+// ==========================================
+
+function createPetal(
+    palette,
+    angle,
+    inner = false
+) {
+
+    const dark = new THREE.Color(palette.dark);
+    const base = new THREE.Color(palette.base);
+    const light = new THREE.Color(palette.light);
+
+    // Closed bud geometry
+
+    const geometry = createSurface(
+
+        20,
+        28,
+
+        (u, v) => {
+
+            return petalPosition(
+                u, v, inner, 0
+            );
+        },
+
+        (u, v) => {
+
+            const color = dark.clone();
+
+            if (v < 0.55) {
+
+                color.lerp(
+                    base,
+                    v / 0.55
+                );
+
+            } else {
+
+                color.copy(base);
+
+                color.lerp(
+                    light,
+                    (v - 0.55) / 0.45 * 0.7
+                );
+            }
+
+            // Delicate petal texture
+
+            const vein =
+                Math.sin(u * 48 + v * 3) *
+                0.025;
+
+            color.multiplyScalar(1 + vein);
+
+            return color;
+        }
+    );
+
+    // Open flower geometry
+
+    const openGeometry = createSurface(
+
+        20,
+        28,
+
+        (u, v) => {
+
+            return petalPosition(
+                u, v, inner, 1
+            );
+        }
+    );
+
+    // Morph between closed and open petals
+
+    geometry.morphAttributes.position = [
+        openGeometry.attributes.position.clone()
+    ];
+
+    geometry.morphAttributes.normal = [
+        openGeometry.attributes.normal.clone()
+    ];
+
+    openGeometry.dispose();
+
+    geometry.computeBoundingSphere();
+
+    const petalMaterial =
+        new THREE.MeshStandardMaterial({
+
+            vertexColors: true,
+            roughness: 0.68,
+            metalness: 0,
+            side: THREE.DoubleSide
+        });
+
+    const petal = new THREE.Mesh(
+        geometry,
+        petalMaterial
+    );
+
+    petal.rotation.y = angle;
+    petal.frustumCulled = false;
+
+    petal.morphTargetInfluences[0] = 0;
+
+    return petal;
+}
+
+// ==========================================
+// COMPLETE TULIP HEAD
+// ==========================================
+
+function createTulipHead(palette) {
+
+    const flower = new THREE.Group();
+    const petals = [];
+
+    // Three outer petals
+
+    for (let i = 0; i < 3; i++) {
+
+        const petal = createPetal(
+            palette,
+            i * Math.PI * 2 / 3,
+            false
+        );
+
+        flower.add(petal);
+
+        petals.push({
+            mesh: petal,
+            delay: random(0, 0.12)
+        });
+    }
+
+    // Three overlapping inner petals
+
+    for (let i = 0; i < 3; i++) {
+
+        const petal = createPetal(
+            palette,
+            i * Math.PI * 2 / 3 +
+            Math.PI / 3,
+            true
+        );
+
+        flower.add(petal);
+
+        petals.push({
+            mesh: petal,
+            delay: random(0.08, 0.2)
+        });
+    }
+
+    // Soft shaded interior
+
+    const center = new THREE.Mesh(
+
+        new THREE.SphereGeometry(
+            0.15, 16, 12
+        ),
+
+        material(palette.dark)
+    );
+
+    center.scale.set(1, 0.45, 1);
+    center.position.y = 0.38;
+
+    flower.add(center);
+
+    return {
+        group: flower,
+        petals
+    };
+}
+
+// ==========================================
+// CURVED GREEN STEMS
+// ==========================================
+
+function createStem(endPosition, index) {
+
+    const root = new THREE.Vector3(
+
+        Math.sin(index * 2.4) * 0.13,
+
+        -3.05,
+
+        Math.cos(index * 2.4) * 0.13
+    );
+
+    const curve = new THREE.CubicBezierCurve3(
+
+        root,
+
+        new THREE.Vector3(
+            root.x,
+            -1.8,
+            root.z
+        ),
+
+        new THREE.Vector3(
+            endPosition.x * 0.65,
+            endPosition.y - 0.7,
+            endPosition.z * 0.65
+        ),
+
+        endPosition
+    );
+
+    const geometry = new THREE.TubeGeometry(
+        curve,
+        40,
+        0.037,
+        8,
+        false
+    );
+
+    const stem = new THREE.Mesh(
+        geometry,
+        material("#638c46")
+    );
+
+    bouquet.add(stem);
+}
+
+// ==========================================
+// MINIMAL LONG TULIP LEAVES
+// ==========================================
+
+function createLeaf(angle, length, width) {
+
+    const dark = new THREE.Color("#345b35");
+    const green = new THREE.Color("#79a85c");
+    const highlight = new THREE.Color("#b1cf86");
+
+    const geometry = createSurface(
+
+        16,
+        30,
+
+        (u, v) => {
+
+            const side = u * 2 - 1;
+
+            const profile = Math.pow(
+                Math.sin(Math.PI * v),
+                0.8
+            );
+
+            const x =
+                side * width * profile;
+
+            const y =
+                v * length;
+
+            const z =
+                Math.pow(v, 1.8) * 1.05 +
+                Math.abs(side) *
+                0.12 *
+                profile;
+
+            return new THREE.Vector3(x, y, z);
+        },
+
+        (u, v) => {
+
+            const color = dark.clone();
+
+            color.lerp(
+                green,
+                0.3 + v * 0.7
+            );
+
+            const vein = Math.exp(
+
+                -Math.pow(
+                    (u - 0.5) * 18,
+                    2
+                )
+            );
+
+            color.lerp(
+                highlight,
+                vein * 0.35
+            );
+
+            return color;
+        }
+    );
+
+    const leaf = new THREE.Mesh(
+
+        geometry,
+
+        new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            roughness: 0.8
+        })
+    );
+
+    const group = new THREE.Group();
+
+    group.add(leaf);
+    group.rotation.y = angle;
+
+    group.position.set(
+        Math.sin(angle) * 0.35,
+        -0.85,
+        Math.cos(angle) * 0.35
+    );
+
+    bouquet.add(group);
+
+    animatedLeaves.push({
+        object: leaf,
+        phase: random(0, Math.PI * 2)
+    });
+}
+
+// ==========================================
+// ROUNDED FLORIST BOUQUET
+// ==========================================
+
+function createFlowers() {
+
+    const goldenAngle =
+        Math.PI * (3 - Math.sqrt(5));
+
+    for (let i = 0; i < FLOWER_COUNT; i++) {
+
+        const radius = Math.sqrt(
+
+            i / Math.max(1, FLOWER_COUNT - 1)
+
+        ) * 1.95;
+
+        const angle = i * goldenAngle;
+
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+
+        const y =
+            2.35 -
+            Math.pow(radius / 1.95, 1.6) *
+            1.05 +
+            random(-0.12, 0.12);
+
+        const position =
+            new THREE.Vector3(x, y, z);
+
+        createStem(position, i);
+
+        const palette =
+            palettes[i % palettes.length];
+
+        const result =
+            createTulipHead(palette);
+
+        const flower = result.group;
+
+        flower.position.copy(position);
+
+        const size = random(0.8, 1.05);
+
+        flower.scale.setScalar(size * 0.82);
+
+        // Natural outward lean
+
+        flower.rotation.z = -x * 0.15;
+        flower.rotation.x = z * 0.15;
+
+        flower.rotation.y =
+            random(0, Math.PI * 2);
+
+        bouquet.add(flower);
+
+        animatedFlowers.push({
+
+            object: flower,
+
+            petals: result.petals,
+
+            baseX: flower.rotation.x,
+
+            baseZ: flower.rotation.z,
+
+            size,
+
+            phase: random(0, Math.PI * 2),
+
+            bloomDelay: random(
+                0,
+                BLOOM_STAGGER
+            )
+        });
+    }
+
+    // Minimal foliage
+
+    for (let i = 0; i < LEAF_COUNT; i++) {
+
+        const angle =
+            i * Math.PI * 2 / LEAF_COUNT;
+
+        createLeaf(
+            angle,
+            random(2.2, 3.1),
+            random(0.13, 0.22)
+        );
+    }
+}
+
+// ==========================================
+// FOLDED WRAPPING PAPER
+// ==========================================
+
+function createPaperSheet(
+    angle,
+    color,
+    height,
+    spread,
+    offset
+) {
+
+    const paperColor = new THREE.Color(color);
+
+    const geometry = createSurface(
+
+        40,
+        30,
+
+        (u, v) => {
+
+            const side = u * 2 - 1;
+
+            const radius =
+                0.24 +
+                Math.pow(v, 1.25) *
+                spread;
+
+            const theta =
+                angle + side * 0.72;
+
+            // Natural paper folds
+
+            const fold =
+                Math.sin(u * Math.PI * 5) *
+                0.07 *
+                Math.pow(v, 1.5);
+
+            const r =
+                radius + fold + offset;
+
+            // Uneven florist paper edges
+
+            const edge =
+                Math.pow(v, 5) *
+                (
+                    Math.abs(side) * 0.42 +
+                    Math.sin(u * Math.PI * 2) *
+                    0.12
+                );
+
+            return new THREE.Vector3(
+
+                Math.sin(theta) * r,
+
+                -2.75 + v * height + edge,
+
+                Math.cos(theta) * r
+            );
+        },
+
+        (u, v) => {
+
+            const color = paperColor.clone();
+
+            const folds =
+                0.87 +
+                Math.sin(u * Math.PI * 5) *
+                0.10;
+
+            color.multiplyScalar(
+                folds + v * 0.08
+            );
+
+            return color;
+        }
+    );
+
+    const paper = new THREE.Mesh(
+
+        geometry,
+
+        new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 0.95,
+            metalness: 0,
+            side: THREE.DoubleSide
+        })
+    );
+
+    bouquet.add(paper);
+}
+
+// ==========================================
+// CREAM AND IVORY WRAPPING
+// ==========================================
+
+function createWrapping() {
+
+    // Inner ivory wrapping
+
+    for (let i = 0; i < 6; i++) {
+
+        createPaperSheet(
+
+            i * Math.PI * 2 / 6,
+
+            i % 2 === 0
+                ? "#f4e9d7"
+                : "#e9dcc6",
+
+            random(3.05, 3.3),
+
+            random(1.45, 1.65),
+
+            0
+        );
+    }
+
+    // Outer cream wrapping
+
+    for (let i = 0; i < 5; i++) {
+
+        createPaperSheet(
+
+            i * Math.PI * 2 / 5 + 0.3,
+
+            i % 2 === 0
+                ? "#d8c4a9"
+                : "#e6d5bd",
+
+            random(2.65, 2.95),
+
+            random(1.55, 1.75),
+
+            0.07
+        );
+    }
+
+    const lowerGeometry =
+        new THREE.CylinderGeometry(
+            0.35,
+            0.55,
+            0.65,
+            9,
+            1,
+            true
+        );
+
+    const lowerPaper = new THREE.Mesh(
+
+        lowerGeometry,
+
+        material("#e5d4bb", 0.95)
+    );
+
+    lowerPaper.position.y = -2.85;
+
+    bouquet.add(lowerPaper);
+}
+
+// ==========================================
+// LAVENDER SATIN RIBBON
+// ==========================================
+
+const ribbonMaterial =
+    new THREE.MeshStandardMaterial({
+
+        color: "#bba0df",
+
+        roughness: 0.38,
+
+        metalness: 0.05,
+
+        side: THREE.DoubleSide
+    });
+
+// ==========================================
+// RIBBON BAND
+// ==========================================
+
+function createRibbonBand() {
+
+    const geometry =
+        new THREE.CylinderGeometry(
+            0.51,
+            0.42,
+            0.24,
+            64,
+            1,
+            true
+        );
+
+    const ribbon = new THREE.Mesh(
+        geometry,
+        ribbonMaterial
+    );
+
+    ribbon.position.y = -2.42;
+
+    bouquet.add(ribbon);
+}
+
+// ==========================================
+// RIBBON BOW LOOPS
+// ==========================================
+
+function createBowLoop(direction) {
+
+    const geometry = createSurface(
+
+        12,
+        50,
+
+        (u, v) => {
+
+            const t = v * Math.PI * 2;
+
+            const width =
+                (u - 0.5) * 0.28;
+
+            const x =
+                direction *
+                Math.sin(t / 2) *
+                0.88;
+
+            const y =
+                Math.sin(t) * 0.32;
+
+            const z =
+                Math.sin(t / 2) * 0.23;
+
+            return new THREE.Vector3(
+
+                x,
+
+                y + width * Math.cos(t),
+
+                z + width * Math.sin(t)
+            );
+        }
+    );
+
+    return new THREE.Mesh(
+        geometry,
+        ribbonMaterial
+    );
+}
+
+// ==========================================
+// FLOWING RIBBON TAILS
+// ==========================================
+
+function createRibbonTail(direction) {
+
+    const geometry = createSurface(
+
+        14,
+        30,
+
+        (u, v) => {
+
+            const side = u * 2 - 1;
+
+            const x =
+                direction *
+                (0.08 + v * 0.5) +
+                side * 0.13;
+
+            const cut =
+                Math.pow(v, 10) *
+                (1 - Math.abs(side)) *
+                0.12;
+
+            const y =
+                -v * 0.95 + cut;
+
+            const z =
+                Math.sin(v * Math.PI) *
+                0.2 +
+                v * 0.12;
+
+            return new THREE.Vector3(x, y, z);
+        }
+    );
+
+    return new THREE.Mesh(
+        geometry,
+        ribbonMaterial
+    );
+}
+
+// ==========================================
+// COMPLETE LAVENDER BOW
+// ==========================================
+
+function createBow() {
+
+    const bow = new THREE.Group();
+
+    bow.position.set(
+        0,
+        -2.42,
+        0.53
+    );
+
+    bow.add(createBowLoop(-1));
+    bow.add(createBowLoop(1));
+
+    bow.add(createRibbonTail(-1));
+    bow.add(createRibbonTail(1));
+
+    const knot = new THREE.Mesh(
+
+        new THREE.SphereGeometry(
+            0.17, 24, 16
+        ),
+
+        ribbonMaterial
+    );
+
+    knot.scale.set(
+        0.85,
+        0.8,
+        0.65
+    );
+
+    knot.position.z = 0.08;
+
+    bow.add(knot);
+
+    bouquet.add(bow);
+}
+
+// ==========================================
+// BUILD COMPLETE BOUQUET
+// ==========================================
+
+createFlowers();
+createWrapping();
+createRibbonBand();
+createBow();
+
+bouquet.rotation.z = -0.035;
+
+// ==========================================
+// RESPONSIVE SCREEN
+// ==========================================
+
+function resize() {
+
+    W = Math.max(1, window.innerWidth);
+    H = Math.max(1, window.innerHeight);
+
+    canvas.width = W;
+    canvas.height = H;
+
+    camera.aspect = W / H;
+
+    const aspect = W / H;
+
+    const distance = Math.max(
+        15,
+        10 / aspect
+    );
+
+    camera.position.set(
+        0,
+        1.5,
+        distance
+    );
+
+    camera.lookAt(0, 0.2, 0);
+    camera.updateProjectionMatrix();
+
+    renderer.setSize(W, H, false);
+
+    ctx.font =
+        `${FONT_SIZE}px monospace`;
+
+    charWidth =
+        ctx.measureText("M").width;
+
+    charHeight =
+        FONT_SIZE * 1.05;
+
+    cols = Math.max(
+        1,
+        Math.ceil(W / charWidth)
+    );
+
+    rows = Math.max(
+        1,
+        Math.ceil(H / charHeight)
+    );
+
+    sample.width = cols;
+    sample.height = rows;
+
+    sampleCtx.imageSmoothingEnabled = true;
+
+    sampleCtx.imageSmoothingQuality = "high";
+}
+
+window.addEventListener("resize", resize);
+
+resize();
+
+// ==========================================
+// COLOURED ASCII RENDERER
+// ==========================================
+
+function renderASCII() {
+
+    sampleCtx.drawImage(
+
+        renderer.domElement,
+
+        0,
+        0,
+        cols,
+        rows
+    );
+
+    const pixels = sampleCtx.getImageData(
+        0,
+        0,
+        cols,
+        rows
+    ).data;
+
+    ctx.fillStyle = "#000000";
+
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.font =
+        `${FONT_SIZE}px monospace`;
+
+    ctx.textBaseline = "top";
+
+    for (let y = 0; y < rows; y++) {
+
+        for (let x = 0; x < cols; x++) {
+
+            const index =
+                (y * cols + x) * 4;
+
+            const r = pixels[index];
+            const g = pixels[index + 1];
+            const b = pixels[index + 2];
+
+            // Pure black background
+
+            if (r + g + b < 18) {
+                continue;
+            }
+
+            const brightness =
+                r * 0.299 +
+                g * 0.587 +
+                b * 0.114;
+
+            const intensity =
+                Math.pow(
+                    brightness / 255,
+                    0.65
+                );
+
+            const charIndex = Math.min(
+
+                CHARACTERS.length - 1,
+
+                Math.max(
+
+                    1,
+
+                    Math.floor(
+                        intensity *
+                        (CHARACTERS.length - 1)
+                    )
+                )
+            );
+
+            const red = Math.round(
+
+                clamp(
+                    brightness +
+                    (r - brightness) *
+                    COLOR_VIBRANCE,
+                    0,
+                    255
+                )
+            );
+
+            const green = Math.round(
+
+                clamp(
+                    brightness +
+                    (g - brightness) *
+                    COLOR_VIBRANCE,
+                    0,
+                    255
+                )
+            );
+
+            const blue = Math.round(
+
+                clamp(
+                    brightness +
+                    (b - brightness) *
+                    COLOR_VIBRANCE,
+                    0,
+                    255
+                )
+            );
+
+            ctx.fillStyle =
+                `rgb(${red},${green},${blue})`;
+
+            ctx.fillText(
+
+                CHARACTERS[charIndex],
+
+                x * charWidth,
+
+                y * charHeight
+            );
+        }
+    }
+}
+
+// ==========================================
+// FASTER NATURAL BLOOMING
+// ==========================================
+
+function updateBloom(time) {
+
+    animatedFlowers.forEach(flower => {
+
+        const elapsed =
+            time -
+            BLOOM_START -
+            flower.bloomDelay;
+
+        const bloom = smooth(
+            elapsed / BLOOM_DURATION
+        );
+
+        // Bud becomes fuller as petals open
+
+        const sizeGrowth =
+            lerp(0.82, 1, bloom);
+
+        flower.object.scale.setScalar(
+            flower.size * sizeGrowth
+        );
+
+        // Individual petals unfold
+
+        flower.petals.forEach(petal => {
+
+            const petalBloom = smooth(
+
+                (bloom - petal.delay) /
+
+                (1 - petal.delay)
+            );
+
+            petal.mesh.morphTargetInfluences[0] =
+                petalBloom;
+        });
+
+        // Gentle natural flower movement
+
+        flower.object.rotation.x =
+
+            flower.baseX +
+
+            Math.sin(
+                time * 1.1 +
+                flower.phase
+            ) * WIND_STRENGTH;
+
+        flower.object.rotation.z =
+
+            flower.baseZ +
+
+            Math.cos(
+                time * 0.9 +
+                flower.phase
+            ) * WIND_STRENGTH;
+    });
+}
+
+// ==========================================
+// GENTLE LEAF MOVEMENT
+// ==========================================
+
+function updateLeaves(time) {
+
+    animatedLeaves.forEach(leaf => {
+
+        leaf.object.rotation.x =
+
+            Math.sin(
+                time * 0.9 +
+                leaf.phase
+            ) * 0.035;
+
+        leaf.object.rotation.z =
+
+            Math.cos(
+                time * 0.7 +
+                leaf.phase
+            ) * 0.025;
+    });
+}
+
+// ==========================================
+// CONTINUOUS 360-DEGREE ROTATION
+// ==========================================
+
+const startTime = performance.now();
+
+let lastFrame = 0;
+
+function animate(now) {
+
+    requestAnimationFrame(animate);
+
+    if (now - lastFrame < 1000 / FPS) {
+        return;
+    }
+
+    lastFrame = now;
+
+    const time =
+        (now - startTime) / 1000;
+
+    // Slow continuous rotation
+
+    bouquet.rotation.y =
+
+        time *
+        Math.PI * 2 /
+        ROTATION_DURATION;
+
+    // Subtle bouquet movement
+
+    bouquet.rotation.z =
+
+        -0.035 +
+
+        Math.sin(time * 0.4) * 0.012;
+
+    // Faster blooming
+
+    updateBloom(time);
+
+    // Gentle leaves
+
+    updateLeaves(time);
+
+    // Render bouquet
+
+    renderer.render(scene, camera);
+
+    // Convert into coloured ASCII
+
+    renderASCII();
+}
+
+requestAnimationFrame(animate);
+
+</script>
+
+</body>
+</html>
